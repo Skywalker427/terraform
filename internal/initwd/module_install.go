@@ -5,7 +5,6 @@ package initwd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -61,19 +60,17 @@ func NewModuleInstaller(modsDir string, loader *configload.Loader, reg *registry
 
 // mdTODO: remove this later, only for iteration while the api hasn't been updated.
 // Example function to inject mock deprecations into ModuleVersions
-func injectMockDeprecations(modules *response.ModuleVersions) {
-	jsonBytes, _ := json.MarshalIndent(modules, "", "  ")
-	log.Printf("[DEBUG] submodule!!!: %s ", string(jsonBytes))
-	log.Printf("[DEBUG] __________________________________________________")
+func injectMockDeprecations(modules *response.ModuleVersions, moduleName string) {
+	//jsonBytes, _ := json.MarshalIndent(modules, "", "  ")
+	//log.Printf("[DEBUG] submodule!!!: %s ", string(jsonBytes))
+	//log.Printf("[DEBUG] __________________________________________________")
 	for _, module := range modules.Modules {
 		for _, version := range module.Versions {
 			// Inject a mock deprecation into each version
-			if version.Version == "5.36.0" || version.Version == "5.37.0" {
-				version.Deprecation = response.Deprecation{
-					Deprecated:   true,
-					Message:      "Mock deprecation message.",
-					ExternalLink: "https://example.com/mock-deprecation",
-				}
+			version.Deprecation = response.Deprecation{
+				Deprecated:   true,
+				Message:      "Mock deprecation message for: " + moduleName,
+				ExternalLink: "https://example.com/mock-deprecation",
 			}
 		}
 	}
@@ -285,7 +282,7 @@ func (i *ModuleInstaller) moduleInstallWalker(ctx context.Context, manifest mods
 						resp, err := regClient.ModuleVersions(ctx, regsrcAddr)
 
 						// mdTODO: remove this later on
-						injectMockDeprecations(resp)
+						injectMockDeprecations(resp, regsrcAddr.RawName)
 
 						// mdTODO: shouldn't error out, will need to continue on as normal
 						if err != nil {
@@ -490,7 +487,7 @@ func (i *ModuleInstaller) installRegistryModule(ctx context.Context, req *config
 		log.Printf("[DEBUG] %s listing available versions of %s at %s", key, addr, hostname)
 		resp, err = reg.ModuleVersions(ctx, regsrcAddr)
 		// mdTODO: remove this
-		injectMockDeprecations(resp)
+		injectMockDeprecations(resp, packageAddr.Name)
 		if err != nil {
 			if registry.IsModuleNotFound(err) {
 				diags = diags.Append(&hcl.Diagnostic{
@@ -634,6 +631,7 @@ func (i *ModuleInstaller) installRegistryModule(ctx context.Context, req *config
 	for _, module := range resp.Modules {
 		for _, modVersion := range module.Versions {
 			v, _ := version.NewVersion(modVersion.Version)
+			// mdTODO: separate out the deprecated check and the check for deprecations in external mod deps, for obvious reasons.
 			if latestMatch.Equal(v) && modVersion.Deprecation.Deprecated {
 				diags = diags.Append(&hcl.Diagnostic{
 					Severity: hcl.DiagWarning,
@@ -641,45 +639,52 @@ func (i *ModuleInstaller) installRegistryModule(ctx context.Context, req *config
 					Detail:   modVersion.Deprecation.ExternalLink,
 					Subject:  req.CallRange.Ptr(),
 				})
+				var externalModuleDependencies []*response.ModuleDep
+				externalModuleDependencies = append(externalModuleDependencies, modVersion.Root.Dependencies...)
+
 				// mdTODO: do I need to do something with the submodules?
 				// how to find deprecations for submodules
 				for _, submodule := range modVersion.Submodules {
-					// doesn't work, need something to parse in the context of the parent module
-					submoduleSource, err := addrs.ParseSubmoduleSourceRegistry(modVersion.Root.Path, submodule.Path)
-					// is still crashing, err being returned here!!!!!!!!!!!!!!!
+					externalModuleDependencies = append(externalModuleDependencies, submodule.Dependencies...)
+				}
+
+				// mdTODO: need to collapse the dependencies so there are no repeats.
+				for _, externalDep := range externalModuleDependencies {
+					externalDepV, _ := version.NewVersion(externalDep.Version)
+					var registryModuleSource addrs.ModuleSourceRegistry
+					externalDepSource, err := addrs.ParseModuleSourceRegistry(externalDep.Source)
 					if err != nil {
 						// dont panic here, mdTODO fix this up
 						// maybe just log it and continue to the next iteration
 						log.Printf("oops: %s", err)
 					}
-					var registryModuleSource addrs.ModuleSourceRegistry
-					if source, ok := submoduleSource.(addrs.ModuleSourceRegistry); ok {
+					if source, ok := externalDepSource.(addrs.ModuleSourceRegistry); ok {
 						registryModuleSource = source
 					}
 
-					submoduleRegistryAddr := regsrc.ModuleFromRegistryPackageAddr(registryModuleSource.Package)
-					submoduleResp, err := reg.ModuleVersions(ctx, submoduleRegistryAddr)
+					externalDepRegistryAddr := regsrc.ModuleFromRegistryPackageAddr(registryModuleSource.Package)
+					externalDepResp, err := reg.ModuleVersions(ctx, externalDepRegistryAddr)
 					if err != nil {
 						// dont panic here, mdTODO fix this up
 						// maybe just log it and continue to the next iteration
 						log.Printf("oops: %s", err)
 					}
-
-					injectMockDeprecations(submoduleResp)
-					for _, subModule := range submoduleResp.Modules {
-						for _, submodVersion := range subModule.Versions {
-							v, _ := version.NewVersion(submodVersion.Version)
-							// mdTODO: will the version of the submodule be the same as the root? looking at the registry suggests so. Though that doesn't make much sense.
-							if latestMatch.Equal(v) && modVersion.Deprecation.Deprecated {
+					injectMockDeprecations(externalDepResp, externalDepRegistryAddr.RawName)
+					for _, externalDepModule := range externalDepResp.Modules {
+						for _, externalDepModVersion := range externalDepModule.Versions {
+							externalDepMouduleV, _ := version.NewVersion(externalDep.Version)
+							if externalDepV.Equal(externalDepMouduleV) && externalDepModVersion.Deprecation.Deprecated {
 								diags = diags.Append(&hcl.Diagnostic{
 									Severity: hcl.DiagWarning,
-									Summary:  submodVersion.Deprecation.Message,
-									Detail:   submodVersion.Deprecation.ExternalLink,
+									Summary:  externalDepModVersion.Deprecation.Message + externalDepModule.Source,
+									Detail:   externalDepModVersion.Deprecation.ExternalLink,
 									Subject:  req.CallRange.Ptr(),
 								})
 							}
 						}
+
 					}
+					break
 				}
 				// once we have found the correct version we don't need to loop futher
 				break

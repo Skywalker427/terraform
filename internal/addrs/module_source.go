@@ -230,21 +230,6 @@ func ParseModuleSourceRegistry(raw string) (ModuleSource, error) {
 	}, nil
 }
 
-func ParseSubmoduleSourceRegistry(parentModulePath string, subModulePath string) (ModuleSource, error) {
-
-	if isModuleSourceLocal(parentModulePath) {
-		return ModuleSourceRegistry{}, fmt.Errorf("can't use local directory %q as a module registry address", parentModulePath)
-	}
-	src, err := tfaddr.ParseModuleSource(parentModulePath + "//" + subModulePath)
-	if err != nil {
-		return nil, err
-	}
-	return ModuleSourceRegistry{
-		Package: src.Package,
-		Subdir:  src.Subdir,
-	}, nil
-}
-
 func (s ModuleSourceRegistry) moduleSource() {}
 
 func (s ModuleSourceRegistry) String() string {
