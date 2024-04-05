@@ -4,6 +4,7 @@
 package terraform
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -362,8 +363,23 @@ output "a" {
 }
 		`,
 		},
+		state: states.BuildState(func(state *states.SyncState) {
+			state.SetResourceInstanceCurrent(
+				mustResourceInstanceAddr("test.a"),
+				&states.ResourceInstanceObjectSrc{
+					Status: states.ObjectReady,
+					AttrsJSON: mustParseJson(map[string]interface{}{
+						"name": "deferred_read", // this signals the mock provider to defer the read
+					}),
+				},
+				addrs.AbsProviderConfig{
+					Provider: addrs.NewDefaultProvider("test"),
+					Module:   addrs.RootModule,
+				})
+		}),
 		stages: []deferredActionsTestStage{
 			{
+
 				buildOpts: func(opts *PlanOpts) {
 					opts.Mode = plans.RefreshOnlyMode
 				},
@@ -381,6 +397,30 @@ output "a" {
 				wantOutputs: map[string]cty.Value{
 					"a": cty.ObjectVal(map[string]cty.Value{
 						"name":           cty.StringVal("a"),
+						"upstream_names": cty.NullVal(cty.Set(cty.String)),
+					}),
+				},
+				wantDeferred: map[string]providers.DeferredReason{
+					"test.a": providers.DeferredReasonProviderConfigUnknown,
+				},
+				complete: false,
+			},
+
+			{
+				inputs:      map[string]cty.Value{},
+				wantPlanned: map[string]cty.Value{
+					// The all resources will be deferred, so shouldn't
+					// have any action at this stage.
+				},
+
+				wantActions: map[string]plans.Action{},
+				wantApplied: map[string]cty.Value{
+					// The all resources will be deferred, so shouldn't
+					// have any action at this stage.
+				},
+				wantOutputs: map[string]cty.Value{
+					"a": cty.ObjectVal(map[string]cty.Value{
+						"name":           cty.StringVal("deferred_read"),
 						"upstream_names": cty.NullVal(cty.Set(cty.String)),
 					}),
 				},
@@ -450,12 +490,16 @@ func TestContextApply_deferredActions(t *testing.T) {
 					}
 
 					plan, diags := ctx.Plan(cfg, state, opts)
+
+					// We expect no diagnostics.
+					assertNoDiagnostics(t, diags)
+
 					if plan.Complete != stage.complete {
 						t.Errorf("wrong completion status in plan: got %v, want %v", plan.Complete, stage.complete)
 					}
 
-					// We expect the correct planned changes and no diagnostics.
-					assertNoDiagnostics(t, diags)
+					// We expect the correct planned change
+
 					provider.plannedChanges.Test(t, stage.wantPlanned)
 
 					// We expect the correct actions.
@@ -603,4 +647,12 @@ func (provider *deferredActionsProvider) Provider() providers.Interface {
 			}
 		},
 	}
+}
+
+func mustParseJson(values map[string]interface{}) []byte {
+	data, err := json.Marshal(values)
+	if err != nil {
+		panic(err)
+	}
+	return data
 }
