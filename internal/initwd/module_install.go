@@ -646,10 +646,11 @@ func (i *ModuleInstaller) installRegistryModule(ctx context.Context, req *config
 				for _, submodule := range modVersion.Submodules {
 					// doesn't work, need something to parse in the context of the parent module
 					submoduleSource, err := addrs.ParseSubmoduleSourceRegistry(modVersion.Root.Path, submodule.Path)
+					// is still crashing, err being returned here!!!!!!!!!!!!!!!
 					if err != nil {
 						// dont panic here, mdTODO fix this up
 						// maybe just log it and continue to the next iteration
-						log.Print("oops")
+						log.Printf("oops: %s", err)
 					}
 					var registryModuleSource addrs.ModuleSourceRegistry
 					if source, ok := submoduleSource.(addrs.ModuleSourceRegistry); ok {
@@ -661,7 +662,7 @@ func (i *ModuleInstaller) installRegistryModule(ctx context.Context, req *config
 					if err != nil {
 						// dont panic here, mdTODO fix this up
 						// maybe just log it and continue to the next iteration
-						log.Print("oops")
+						log.Printf("oops: %s", err)
 					}
 
 					injectMockDeprecations(submoduleResp)
