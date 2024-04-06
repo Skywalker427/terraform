@@ -148,12 +148,20 @@ func (s *Scope) Functions() map[string]function.Function {
 			"zipmap":           stdlib.ZipmapFunc,
 		}
 
-		coreFuncs["templatefile"] = funcs.MakeTemplateFileFunc(s.BaseDir, func() map[string]function.Function {
-			// The templatefile function prevents recursive calls to itself
-			// by copying this map and overwriting the "templatefile" and
-			// "core:templatefile" entries.
+		// Our two template-rendering functions want to be able to call
+		// all of the other functions themselves, but we pass them indirectly
+		// via a callback to avoid chicken/egg problems while initializing
+		// the functions table.
+		funcsFunc := func() map[string]function.Function {
+			// The templatefile and templatestring functions prevent recursive
+			// calls to themselves and each other by copying this map and
+			// overwriting the relevant entries.
 			return s.funcs
-		})
+		}
+		coreFuncs["templatefile"] = funcs.MakeTemplateFileFunc(s.BaseDir, funcsFunc)
+		if s.activeExperiments.Has(experiments.TemplateStringFunc) {
+			coreFuncs["templatestring"] = funcs.MakeTemplateStringFunc(funcsFunc)
+		}
 
 		if s.ConsoleMode {
 			// The type function is only available in terraform console.
